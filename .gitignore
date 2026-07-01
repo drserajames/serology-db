@@ -1,0 +1,16 @@
+# This repo is CODE ONLY. All output goes to $SERO_OUT (default
+# acmacs-data/serology-db/), never here. These rules guard against accidentally
+# committing WHO-derived data even if SERO_OUT is ever pointed inside the repo.
+__pycache__/
+*.pyc
+.DS_Store
+
+# generated data artifacts (WHO-derived — must never be committed)
+out/
+csv/
+parquet/
+*.duckdb
+*.parquet
+*.csv
+*.manifest
+.match_meta
