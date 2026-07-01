@@ -19,7 +19,7 @@ Output: out/csv/location.csv          raw location -> country/continent/lat-long
 import csv, json, lzma, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ACMACS_DATA = os.environ.get("ACMACS_DATA", "/Users/sarahjames/AC/eu/acmacs-data")
+ACMACS_DATA = os.environ.get("ACMACS_DATA", os.path.normpath(os.path.join(HERE, os.pardir, "acmacs-data")))
 OUT = os.environ.get("SERO_OUT", os.path.join(ACMACS_DATA, "serology-db"))
 CSV_DIR = os.environ.get("SERO_CSV_DIR", os.path.join(OUT, "csv"))
 LOCDB = os.path.join(ACMACS_DATA, "locationdb.json.xz")

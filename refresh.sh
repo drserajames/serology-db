@@ -18,7 +18,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ACMACS_DATA="${ACMACS_DATA:-/Users/sarahjames/AC/eu/acmacs-data}"
+# Default assumes acmacs-data is a sibling of this repo; override via env.
+ACMACS_DATA="${ACMACS_DATA:-$(cd "$HERE/.." && pwd)/acmacs-data}"
 # Output lives outside this code dir (large, WHO-derived); gitignored in
 # acmacs-data. Override with SERO_OUT. The python scripts read the same default.
 OUT="${SERO_OUT:-$ACMACS_DATA/serology-db}"

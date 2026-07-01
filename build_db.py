@@ -14,7 +14,9 @@ NOTE: contains real WHO CC serology data. Keep local; do not commit/push.
 """
 import csv, json, lzma, math, os, re, sys
 
-ACMACS_DATA = os.environ.get("ACMACS_DATA", "/Users/sarahjames/AC/eu/acmacs-data")
+HERE = os.path.dirname(os.path.abspath(__file__))
+# Default assumes acmacs-data is a sibling of this repo; override via env.
+ACMACS_DATA = os.environ.get("ACMACS_DATA", os.path.normpath(os.path.join(HERE, os.pardir, "acmacs-data")))
 # Output lives OUTSIDE this code dir (large, WHO-derived) — defaults into
 # acmacs-data (gitignored there). Override with SERO_OUT.
 OUT = os.environ.get("SERO_OUT", os.path.join(ACMACS_DATA, "serology-db"))

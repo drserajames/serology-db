@@ -13,8 +13,9 @@ Env (auto-defaulted): PYTHONPATH→ae/build, SEQDB_V4, LOCDB_V2, AC_CLADES_JSON_
 import csv, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ACMACS_DATA = os.environ.get("ACMACS_DATA", "/Users/sarahjames/AC/eu/acmacs-data")
-AE_BUILD = os.environ.get("AE_BUILD", "/Users/sarahjames/AC/eu/ae/build")
+# Defaults assume acmacs-data and ae are siblings of this repo; override via env.
+ACMACS_DATA = os.environ.get("ACMACS_DATA", os.path.normpath(os.path.join(HERE, os.pardir, "acmacs-data")))
+AE_BUILD = os.environ.get("AE_BUILD", os.path.normpath(os.path.join(HERE, os.pardir, "ae", "build")))
 OUT = os.environ.get("SERO_OUT", os.path.join(ACMACS_DATA, "serology-db"))
 CSV_DIR = os.environ.get("SERO_CSV_DIR", os.path.join(OUT, "csv"))
 os.environ.setdefault("SEQDB_V4", ACMACS_DATA)

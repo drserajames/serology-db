@@ -11,6 +11,10 @@ Postgres-backed upload/query/download service.
 > `acmacs-data/serology-db/`**, which is `.gitignore`d there (it's a large,
 > regenerable, WHO-derived artifact). Override the location with the `SERO_OUT`
 > env var. Paths written `out/…` below are relative to `$SERO_OUT`.
+>
+> **Portability:** no paths are hardcoded. Defaults assume `acmacs-data/` and
+> `ae/` are siblings of this repo (resolved relative to the scripts); override
+> with `ACMACS_DATA`, `AE_BUILD`, and `SERO_OUT` if your layout differs.
 
 ## Data lineage
 

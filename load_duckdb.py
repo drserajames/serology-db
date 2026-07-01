@@ -8,7 +8,7 @@ Produces:
 import os, duckdb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ACMACS_DATA = os.environ.get("ACMACS_DATA", "/Users/sarahjames/AC/eu/acmacs-data")
+ACMACS_DATA = os.environ.get("ACMACS_DATA", os.path.normpath(os.path.join(HERE, os.pardir, "acmacs-data")))
 # Output lives outside this code dir (large, WHO-derived); override with SERO_OUT.
 OUT = os.environ.get("SERO_OUT", os.path.join(ACMACS_DATA, "serology-db"))
 CSV = os.environ.get("SERO_CSV_DIR", os.path.join(OUT, "csv"))

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Demonstrate the query experience over the prototype DB."""
 import os, duckdb
-_ACMACS = os.environ.get("ACMACS_DATA", "/Users/sarahjames/AC/eu/acmacs-data")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ACMACS = os.environ.get("ACMACS_DATA", os.path.normpath(os.path.join(_HERE, os.pardir, "acmacs-data")))
 _OUT = os.environ.get("SERO_OUT", os.path.join(_ACMACS, "serology-db"))
 con = duckdb.connect(os.path.join(_OUT, "serology.duckdb"), read_only=True)
 
