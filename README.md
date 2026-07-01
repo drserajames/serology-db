@@ -16,6 +16,21 @@ Postgres-backed upload/query/download service.
 > `ae/` are siblings of this repo (resolved relative to the scripts); override
 > with `ACMACS_DATA`, `AE_BUILD`, and `SERO_OUT` if your layout differs.
 
+## Guardrail — pre-commit hook
+
+This is a **public** repo, so a tracked hook (`hooks/pre-commit`) blocks any
+commit whose staged changes look like real assay data — strain names, serum/lab
+IDs, GISAID accessions, or amino-acid/nucleotide sequence runs. Activate it once
+per clone:
+
+```bash
+git config core.hooksPath hooks
+```
+
+Bypass a genuine false positive with `git commit --no-verify`. The hook is a
+backstop; the primary protection is that all data output lives in the gitignored
+`$SERO_OUT`, never in this tree.
+
 ## Data lineage
 
 ```

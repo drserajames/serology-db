@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Guardrail: block WHO CC data from entering this PUBLIC repo.
+#
+# Scans the STAGED added lines for things that look like real assay data —
+# strain names, serum/lab IDs, GISAID accessions, or amino-acid/nucleotide
+# sequence runs — and aborts the commit if any are found. This repo is code
+# only; all data lives in the gitignored output dir ($SERO_OUT).
+#
+# Activate (once per clone):   git config core.hooksPath hooks
+# Bypass a false positive:     git commit --no-verify   (use only if CERTAIN)
+set -u
+
+# Added lines in the staged diff, excluding this hook itself (its patterns are
+# definitions, not data) and the +++ file headers.
+added="$(git diff --cached --no-color --unified=0 --diff-filter=ACM \
+          -- . ':(exclude)hooks/pre-commit' \
+        | grep -E '^\+[^+]')" || true
+[ -z "$added" ] && exit 0
+
+fail=0
+check() {  # label  regex  (case-sensitive: real WHO data is upper-case)
+  local hits
+  hits="$(printf '%s\n' "$added" | grep -nE "$2")" || return 0
+  [ -n "$hits" ] || return 0
+  echo "  ✗ $1:"
+  printf '%s\n' "$hits" | sed 's/^/      /' | head -4
+  fail=1
+}
+
+check "amino-acid sequence run (>=24)" '[ACDEFGHIKLMNPQRSTVWY]{24,}'
+check "nucleotide sequence run (>=24)"  '[ACGTN]{24,}'
+check "lab id (LAB#nnnn)"               '\b[A-Z]{2,6}#[0-9]{4,}'
+check "serum id (LAB nnnn-nn)"          '\b(CDC|MELB|CRICK|NIID|VIDRL|CNIC) ?[0-9]{4}-[0-9]{2,}'
+check "GISAID accession"                'EPI_?ISL_?[0-9]{4,}'
+check "strain name (LOCATION/iso/YEAR)" '[A-Z][A-Z ]{2,}/[0-9]+/(19|20)[0-9]{2}'
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "COMMIT BLOCKED — staged changes look like they contain WHO CC data."
+  echo "This is a public repo; data must never be committed (it lives in \$SERO_OUT)."
+  echo "If this is a false positive, bypass with:  git commit --no-verify"
+  exit 1
+fi
+exit 0
