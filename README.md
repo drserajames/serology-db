@@ -154,10 +154,22 @@ Needs the built ae extension + reference data (auto-defaulted in the scripts):
 > seqdb v4 snapshot stores lab *names* with empty id lists** (0 of 214,591 H3
 > seqs have a non-empty lab_id). Estimated recovery against this seqdb: **0
 > antigens.** It would only help against a seqdb whose lab_ids are populated
-> (server-side pipeline). So ~38% is effectively the ceiling here. (Separately,
-> `populate_from_seqdb` uses the name-indexed `select_by_name` before
-> `filter_name` — a real speed lever, but neither it nor `select_by_lab_id` is
-> bound to Python, so both need a `ae_backend` rebuild to use.)
+> (server-side pipeline). So ~38% is effectively the ceiling here.
+>
+> **pybind speed lever — evaluated, not worth it (2026-07).** The match's per-key
+> cost (~2.4 ms) is dominated by rebuilding the full `select_all()` selection each
+> call (~2.0 ms; memory-bandwidth-bound), not the name scan. Exposing ae's
+> `select_by_name` to Python would *not* help: it is an **O(n) linear scan**, not
+> index-backed (`cc/sequences/seqdb.cc:168` — it ignores the class's own O(log n)
+> `find_by_name` binary search). A real speedup would need a C++ *logic* change
+> (reimplement `select_by_name` on `find_by_name`) plus a rebuild of the fragile ae
+> tree and a fork coupling — for a one-time cold-build saving, since the match is
+> already incrementally cached (~5–30 s warm). Cheaper alternative if cold-build
+> speed ever matters: a **pure-Python name index** — iterate the seqdb once (~0.15 s
+> for 241k H3 seqs via the bound `.name()`), then dict-lookup each antigen. Measured
+> **100 % hit/miss agreement** with `filter_name` and 136/137 exact seq_id (the one
+> diff is a same-strain ranking tie-break), turning the ~4 min cold match into ~1 s
+> with **no ae rebuild**. Left unimplemented (caching already covers the common case).
 
 ## Locations — resolved via locationdb
 
