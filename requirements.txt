@@ -1,0 +1,8 @@
+# Runtime dependencies for the serology-db build pipeline.
+# Install:  python3 -m pip install -r requirements.txt
+#
+# NOTE: the sequence/clade stages additionally need the `ae_backend` C++
+# extension, which is NOT a pip package — it is built from ~/AC/eu/ae and reached
+# via PYTHONPATH=<ae>/build (see README "Sequences & clades"). The titer DB build
+# needs only the packages below.
+duckdb~=1.5

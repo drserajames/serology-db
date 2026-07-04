@@ -1,0 +1,34 @@
+name: ci
+
+# Smoke test for the serology-db build code. CI has neither the WHO-derived
+# hidb5/seqdb sources, the built ae_backend extension, nor the whocc-tables
+# charts, so it runs only the HERMETIC test layers: the pure-function unit tests
+# and the end-to-end fixture (a tiny synthetic hidb5 built in a tmp dir). The
+# live-DB invariant tests and the ae-fidelity test skip themselves cleanly when
+# their inputs are absent — so a green run here means the reshape/parse logic and
+# the DuckDB-independent code paths are sound. Run the full suite locally after
+# ./refresh.sh for the invariant + fidelity layers.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip -r requirements-dev.txt
+      - name: Run hermetic test suite
+        # -rs prints the reason for each skip so the log shows what was gated out.
+        run: python -m pytest -rs

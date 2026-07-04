@@ -36,6 +36,8 @@ backstop; the primary protection is that all data output lives in the gitignored
 ```
 acmacs-data/hidb5.{h1,h3,b}.json.xz   (normalised antigen/serum identity + raw titer matrices)
    └─ build_db.py        → out/csv/{antigen,serum,titer_table,titer}.csv   tidy long form
+whocc-tables/*.ace  (canonical source charts)
+   └─ build_clipped.py   → out/csv/recovered_{antigen,serum,titer}.csv  cells hidb dropped (opt; via ae_backend)
 seqdb-{h1,h3,b}.v4.json.xz (HA sequences)
    └─ build_sequences.py → out/csv/match.csv   ag_id→seq_id + aa  (parallel; ~4 min; via ae_backend)
 clades.json
@@ -61,21 +63,33 @@ see below.
 
 | table | grain | key columns |
 |-------|-------|-------------|
-| `antigen` | one test antigen | `ag_id`, name, virus_type, lineage, location, year, passage, collection_date |
-| `serum` | one antiserum | `sr_id`, serum_id, name, species, lineage, passage |
+| `antigen` | one test antigen | `ag_id`, name, virus_type, lineage, location, year, passage, collection_date, source |
+| `serum` | one antiserum | `sr_id`, serum_id, name, species, lineage, passage, source |
 | `titer_table` | one assay table | `tab_id`, subtype, assay, rbc, lab, virus, table_date |
-| `titer` | one antigen×serum reading | `tab_id`, `ag_id`, `sr_id`, titer_raw, titer_kind, titer_value, log_titer |
+| `titer` | one antigen×serum reading | `tab_id`, `ag_id`, `sr_id`, titer_raw, titer_kind, titer_value, log_titer, log_titer_thresholded, source |
 | `sequence` | one antigen's HA seq | `ag_id`, seq_id, clade, clade_path, aa_length, nuc_length, aa |
 | `location` | one resolved place | `location` (raw hidb `O`), canonical, country, continent, division, latitude, longitude |
 | `titer_flat` *(view)* | denormalised join | titer + antigen + serum + `antigen_clade` + `antigen_country`/`antigen_continent` |
 | `antigen_sequence` *(view)* | antigen ⨝ seq ⨝ geo | antigen columns + seq_id, clade, aa + country/continent/lat/long |
 
-- IDs are `subtype:index` (e.g. `h3:1042`).
+- IDs are `subtype:index` (e.g. `h3:1042`). Recovered antigens/sera (see
+  "Clipped cells") use content-derived ids `subtype:ra:<hash>` / `subtype:rs:<hash>`.
+- `source`: `hidb` (the bulk) or `ace_recovered` (clipped cells recovered from the
+  source charts). Filter on it to include/exclude recovered data; `titer_flat`
+  exposes both `source` (of the titer) and `antigen_source`.
 - `titer_kind`: `num` (exact), `lt` (`<N`, left-censored), `gt` (`>N`), `other`.
 - `log_titer` = log2(value / 10) (acmacs convention). Missing `*` cells are omitted.
+  This is exactly ae's `Titer::logged()` (verified byte-for-byte against the C++
+  toolkit on real charts — see `tests/test_ae_fidelity.py`).
+- `log_titer_thresholded` = the **aggregation-correct** log, matching ae's
+  `Titer::logged_with_thresholded()`: identical to `log_titer` for exact readings,
+  but a left-censored `<N` counts as `N/2` (`log−1`) and a right-censored `>N` as
+  `N×2` (`log+1`). **Use this column for GMT/SD/averaging.** See "Censoring" below.
 
-Current volume: **268,729 antigens · 5,685 sera · 9,365 tables · 3,581,094 titers
-· 102,050 antigen sequences**.
+Current volume (hidb): **268,729 antigens · 5,685 sera · 9,365 tables · 3,581,094
+titers · 102,050 antigen sequences**, plus **+995 antigens · +32 sera · +32,207
+titers** recovered from source charts (`source='ace_recovered'`) when `build_clipped`
+runs → 269,724 antigens · 5,717 sera · 3,613,301 titers total.
 
 ## Sequences & clades — reusing ae's matcher
 
@@ -159,6 +173,7 @@ a bridge to ae's `geo-draw`.
 
 ```bash
 python3 build_db.py         # hidb5 → out/csv/          (~5 s)
+python3 build_clipped.py    # .ace → recovered_*.csv    (~3 s, optional; needs ae + whocc-tables)
 python3 build_locations.py  # locationdb → location.csv (~1 s, pure Python)
 python3 build_sequences.py  # seqdb → out/csv/match.csv (~4 min first run, then ~5-30 s; needs ae)
 python3 build_clades.py     # clades.json → clade.csv   (~4 s, needs ae)
@@ -167,6 +182,53 @@ python3 demo_queries.py     # example analytical queries
 ```
 
 But normally just run `./refresh.sh` — it runs only the stale stages (below).
+
+### Testing
+
+```bash
+python3 -m pip install -r requirements-dev.txt   # duckdb + pytest
+python3 -m pytest                                # from the repo root
+```
+
+Three layers, all hermetic (no WHO data, no network):
+
+- **Unit** (`test_parsing.py`) — pins `build_db`'s pure reshape functions
+  (`parse_titer` kind/value/log, strain-name reconstruction).
+- **Fixture regression** (`test_build_db_fixture.py`) — runs the real
+  `build_db.main()` over a tiny synthetic `hidb5.h1.json.xz` in a tmp dir and
+  asserts the emitted CSVs exactly, including the clipped-cell tally. This is the
+  guard for changes to the reshape/clipping logic.
+- **DB invariants** (`test_db_invariants.py`) — read-only checks against the
+  built `serology.duckdb`: FK integrity (no orphan titers/sequences), unique PKs,
+  titer-kind partition, `log_titer == log2(value/10)`, location resolution ≥ 98%,
+  sequence-coverage band, and that the `titer_flat` / `antigen_sequence` views
+  preserve row counts. Skips cleanly (not fails) if the DB hasn't been built.
+
+The synthetic fixtures contain only obviously-fake values and live in a tmp dir —
+never committed. Run the invariant layer after any `./refresh.sh` to confirm the
+refresh didn't silently corrupt the store.
+
+**CI.** `.github/workflows/ci.yml` runs the *hermetic* layers (unit + fixture) on
+Python 3.12–3.14 for every push/PR — CI has no WHO data, no built `ae_backend`,
+and no charts, so the invariant/fidelity layers skip there (27 run, 18 skip). A
+green run means the reshape/parse logic is sound; run the full suite locally.
+
+### Environment & reproducibility
+
+| Piece | Value / source |
+|---|---|
+| Python | 3.14 (`/opt/homebrew/bin/python3`); code is stdlib + `duckdb` only |
+| Runtime deps | `requirements.txt` (`duckdb~=1.5`) — `pip install -r requirements.txt` |
+| Dev/test deps | `requirements-dev.txt` (adds `pytest~=9.1`) |
+| Sequence/clade deps | `ae_backend` (built from `~/AC/eu/ae`, reached via `PYTHONPATH=<ae>/build`) — **not a pip package**; optional (titer DB builds without it) |
+| Env overrides | `ACMACS_DATA`, `AE_BUILD`, `SERO_OUT`, `SERO_CSV_DIR`; sequence stages also read `SEQDB_V4`, `LOCDB_V2`, `AC_CLADES_JSON_V2` (all auto-defaulted relative to the repo) |
+
+Quick preflight before a build:
+
+```bash
+python3 -c "import duckdb; print('duckdb', duckdb.__version__)"
+PYTHONPATH=<ae>/build python3 -c "import ae_backend; print('ae_backend ok')"  # optional
+```
 
 ### Updating (`refresh.sh` — runs only the stale stage)
 
@@ -212,13 +274,48 @@ FROM read_parquet('../acmacs-data/serology-db/parquet/titer/*/*.parquet', hive_p
 GROUP BY ALL;
 ```
 
+## Censoring — how left/right-censored titers are logged
+
+Assay titers are frequently censored: `<10` (below the detection limit) or
+`>2560` (off the top of the dilution series). In this data **9.3% of readings are
+left-censored** (`lt`) and 0.6% right-censored (`gt`) — not negligible for summary
+statistics. There are two logged columns, mirroring ae's two purpose-specific
+conventions (validated against the C++ `Titer` class in `tests/test_ae_fidelity.py`):
+
+| column | ae function | `<10` → | `>1280` → | use for |
+|---|---|---|---|---|
+| `log_titer` | `logged()` | 0 (face value) | 7 | display; regular-titer map distances |
+| `log_titer_thresholded` | `logged_with_thresholded()` | −1 (= 5) | 8 (= 2560) | **GMT / SD / averaging** |
+
+The choice is not cosmetic. H3 HI GMT computed three ways over the same readings:
+
+| treatment | GMT |
+|---|---|
+| drop censored (`titer_kind='num'` only) | **205** |
+| face value (`avg(log_titer)`, all kinds) | 182 |
+| canonical (`avg(log_titer_thresholded)`) | **174** |
+
+Dropping censored titers biases GMT *upward* by ~18% here, because it discards the
+low `<N` readings. The demo queries (and any GMT you write) should use
+`log_titer_thresholded` and include `lt`/`gt` — see `demo_queries.py` query 8.
+(For *map optimization* ae treats `<N` as a one-sided inequality constraint and
+drops `>N`; that lives in the optimizer, not in this analytics store.)
+
 ## Known caveats (prototype fidelity)
 
-- **Clipped cells:** ~32.7k titer cells (~0.9%) sit in tables with more titer
-  rows/cols than registered hidb indices (antigens/sera absent from the identity
-  DB). They are dropped and counted (`clipped_cells` in `build_db.py` output),
-  not silently lost. A production build would reconcile these against the `.ace`
-  charts.
+- **Clipped cells — recovered (`build_clipped.py`).** 32,718 titer cells (~0.9%)
+  across 1,388 tables sit in matrix rows/cols beyond the registered hidb indices —
+  antigens/sera hidb5 itself could not resolve to its identity DB (ae's own hidb
+  reader drops them identically). `build_db` drops and counts them; the optional
+  `build_clipped` stage then **recovers them from the canonical source charts** in
+  `whocc-tables/`. It maps each clipped table to its `.ace` and — only when the
+  registered cells are *byte-identical* to the source (strict alignment, so a
+  wrong strain identity is never attached) — re-adds the dropped rows/cols as
+  `antigen`/`serum`/`titer` rows tagged `source='ace_recovered'`. Result:
+  **32,207 / 32,718 cells (98.4%) recovered** across 1,352 tables (995 distinct
+  recovered antigens, 32 sera). The residual ~1.6% is 36 tables with no aligned
+  source chart on disk. Recovery is optional (needs `ae_backend` + `whocc-tables`);
+  a titers-only build simply omits it.
 - **CJK names:** hidb5 uses a non-standard `\U####` escape for Chinese location
   names; `load_json_xz()` normalises it to standard JSON `\u####`.
 - **Sequence coverage ~38%:** only antigens with an HA sequence in seqdb get a

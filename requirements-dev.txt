@@ -1,0 +1,4 @@
+# Dev/test dependencies (superset of runtime).
+# Install:  python3 -m pip install -r requirements-dev.txt
+-r requirements.txt
+pytest~=9.1

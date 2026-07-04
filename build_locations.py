@@ -56,9 +56,10 @@ def main():
         i = countries.get(country)
         return continents[i] if isinstance(i, int) and 0 <= i < len(continents) else ""
 
-    # distinct locations across antigens + sera
+    # distinct locations across antigens + sera (incl. recovered, if present)
     locs = set()
-    for fn in ("antigen.csv", "serum.csv"):
+    for fn in ("antigen.csv", "serum.csv",
+               "recovered_antigen.csv", "recovered_serum.csv"):
         p = os.path.join(CSV_DIR, fn)
         if not os.path.exists(p):
             continue

@@ -24,12 +24,13 @@ rd = lambda name: (f"read_csv('{os.path.join(CSV, name)}', header=true, "
 con.execute(f"""
 CREATE TABLE antigen AS SELECT
   ag_id, subtype, name, virus_type, lineage, location, isolation, year,
-  passage, reassortant, TRY_CAST(collection_date AS DATE) AS collection_date
+  passage, reassortant, TRY_CAST(collection_date AS DATE) AS collection_date,
+  'hidb' AS source          -- provenance: 'hidb' | 'ace_recovered' (see below)
 FROM {rd('antigen.csv')};
 
 CREATE TABLE serum AS SELECT
   sr_id, subtype, serum_id, name, virus_type, lineage, location, isolation,
-  year, passage, species
+  year, passage, species, 'hidb' AS source
 FROM {rd('serum.csv')};
 
 CREATE TABLE titer_table AS SELECT
@@ -40,9 +41,48 @@ FROM {rd('titer_table.csv')};
 CREATE TABLE titer AS SELECT
   tab_id, ag_id, sr_id, titer_raw, titer_kind,
   TRY_CAST(titer_value AS INTEGER) AS titer_value,
-  TRY_CAST(log_titer AS DOUBLE) AS log_titer
+  TRY_CAST(log_titer AS DOUBLE) AS log_titer,
+  -- log_titer is ae Titer::logged() (face value, log2(value/10)). For summary
+  -- stats (GMT/SD) the canonical convention is ae Titer::logged_with_thresholded():
+  -- a left-censored <N counts as N/2 (log-1), a right-censored >N as N*2 (log+1).
+  -- Use THIS column for averaging so censored readings aren't biased.
+  CASE titer_kind
+    WHEN 'lt' THEN TRY_CAST(log_titer AS DOUBLE) - 1
+    WHEN 'gt' THEN TRY_CAST(log_titer AS DOUBLE) + 1
+    ELSE TRY_CAST(log_titer AS DOUBLE)
+  END AS log_titer_thresholded,
+  'hidb' AS source
 FROM {rd('titer.csv')};
 """)
+
+# Clipped-cell recovery (build_clipped.py, optional): titer cells hidb5 dropped as
+# unresolved, recovered from the canonical source .ace charts and tagged provenance
+# 'ace_recovered'. Recovered antigens/sera use content-derived ids ({sub}:ra|rs:hash)
+# that can't collide with hidb's positional ids; recovered titers keep the original
+# tab_id so they attach to existing titer_table rows. Appended here so every
+# downstream view/index/export includes them uniformly.
+_rec_ag = os.path.join(CSV, "recovered_antigen.csv")
+if os.path.exists(_rec_ag):
+    con.execute(f"""
+    INSERT INTO antigen SELECT
+      ag_id, subtype, name, virus_type, lineage, location, isolation, year,
+      passage, reassortant, TRY_CAST(collection_date AS DATE), 'ace_recovered'
+    FROM {rd('recovered_antigen.csv')};
+    INSERT INTO serum SELECT
+      sr_id, subtype, serum_id, name, virus_type, lineage, location, isolation,
+      year, passage, species, 'ace_recovered'
+    FROM {rd('recovered_serum.csv')};
+    INSERT INTO titer SELECT
+      tab_id, ag_id, sr_id, titer_raw, titer_kind,
+      TRY_CAST(titer_value AS INTEGER), TRY_CAST(log_titer AS DOUBLE),
+      CASE titer_kind WHEN 'lt' THEN TRY_CAST(log_titer AS DOUBLE) - 1
+                      WHEN 'gt' THEN TRY_CAST(log_titer AS DOUBLE) + 1
+                      ELSE TRY_CAST(log_titer AS DOUBLE) END,
+      'ace_recovered'
+    FROM {rd('recovered_titer.csv')};
+    """)
+    _n = con.execute("SELECT count(*) FROM titer WHERE source='ace_recovered'").fetchone()[0]
+    print(f"  recovered   {_n:>9,} clipped titers merged (source='ace_recovered')")
 
 # Sequences: two independent stages joined on seq_id — match.csv (ag_id->seq_id
 # + aa, slow, depends on hidb5+seqdb) and clade.csv (seq_id->clade, near-instant,
@@ -98,7 +138,8 @@ SELECT t.tab_id, tb.subtype, tb.assay, tb.rbc, tb.lab, tb.virus, tb.table_date,
        a.year AS antigen_year, sq.clade AS antigen_clade,
        loc.country AS antigen_country, loc.continent AS antigen_continent,
        s.name AS serum, s.serum_id, s.species AS serum_species,
-       t.titer_raw, t.titer_kind, t.titer_value, t.log_titer
+       t.titer_raw, t.titer_kind, t.titer_value, t.log_titer, t.log_titer_thresholded,
+       t.source, a.source AS antigen_source
 FROM titer t
 JOIN titer_table tb USING (tab_id)
 JOIN antigen a USING (ag_id)

@@ -77,6 +77,14 @@ fi
 cd "$HERE"
 if [[ $titer_stale == 1 ]]; then
   echo ">> titers (hidb5)…";           python3 build_db.py
+  # Clipped-cell recovery (optional; needs ae_backend + whocc-tables). Remove any
+  # stale outputs FIRST: recovered_*.csv reference positional tab_ids/ag_ids that
+  # don't survive a hidb regeneration, so a skipped/failed run must not leave old
+  # ones to be merged against freshly-rebuilt titers.
+  rm -f "$OUT/csv/recovered_antigen.csv" "$OUT/csv/recovered_serum.csv" \
+        "$OUT/csv/recovered_titer.csv"
+  echo ">> clipped-cell recovery (source .ace; optional)…"
+  python3 build_clipped.py || echo ">> clipped recovery skipped (ae/whocc unavailable); titer DB intact" >&2
   echo ">> locations (locationdb)…";   python3 build_locations.py || echo ">> locations skipped" >&2
 fi
 if [[ $seq_stale == 1 ]]; then
