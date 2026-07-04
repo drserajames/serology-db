@@ -7,6 +7,26 @@ engineering — while keeping it working at every step. This is an incremental c
 not a rewrite. It doubles as a handoff for anyone (human or agent) picking the work up
 cold; start by reading `README.md` end to end (it's the authoritative design doc).
 
+## Status — 2026-07-04
+
+All six fidelity + hardening objectives (#1–#6) are **done and pushed** to
+`drserajames/master`; only the optional Postgres service (#7) remains. Every change
+was verified empirically and kept the prototype working. The suite is **69 tests**;
+volumes are unchanged (~3.58M titers, ~102k sequences).
+
+| # | Objective | Status |
+|---|---|---|
+| 4 | Test suite | ✅ `tests/` + `pytest.ini` + hermetic CI (py 3.12–3.14). Unit + fixture + live-DB invariants + ae-fidelity layers. |
+| 2 | Censoring conventions | ✅ Verified our `log_titer` ≡ ae `Titer::logged()`; added `log_titer_thresholded` (≡ `logged_with_thresholded`) for GMT/SD; demo query 8 shows the 3-way difference. |
+| 1 | Reconcile clipped cells vs `.ace` | ✅ `build_clipped.py` recovers 98.4% of the dropped cells from source charts under **strict byte-identical alignment**; `source` provenance column (`hidb` / `ace_recovered`). |
+| 5 | Stable content-based keys | ✅ `natural_keys.py` — reorder-invariant, regeneration-stable ids shared by build_db + build_clipped; old positional id retained as `hidb_id`. The UPSERT foundation for #7. |
+| 6 | Reproducibility / CI | ✅ Pinned `requirements*.txt`; documented env; hermetic smoke-test CI. |
+| 3 | ae pybind speed lever | ✅ **Evaluated → not worth it** (the README's "name-indexed" premise was wrong: `select_by_name` is an O(n) scan). Built a pure-Python `--index` fast path instead — **byte-identical** output, ~4 min → ~1 min, no ae rebuild. |
+| 7 | Postgres service | ⏸ Deferred (opt-in). Needed only if the DB becomes multi-writer, a source of truth for non-hidb5 data, or a networked service — not for the current single-analyst, rebuilt-from-hidb5 analytical use, where DuckDB is the better fit. |
+
+Pushed commits on `master`: `6395bd2` (#1) · `2be9657` (#5) · `6acaea1` +
+`6b9b522` (#3). Detail for each lives in `README.md` and the commit messages.
+
 ## Where things live
 
 - **Code repo:** `~/AC/eu/serology-db/` — this repo, branch `master`, remote `origin` =
