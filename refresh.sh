@@ -4,6 +4,8 @@
 #   ./refresh.sh           rebuild whatever changed (data and/or clades)
 #   ./refresh.sh --force   rebuild everything regardless of hashes
 #   ./refresh.sh --no-seq  titers only; skip the (slow, ~4 min) sequence match
+#   ./refresh.sh --fast-seq  match via the pure-Python name index (build_sequences
+#           --index): single-process, ~4x faster on a cold match, identical result
 #   ./refresh.sh --pull    first pull fresh hidb5 from upstream (needs WHO CC
 #                          SSH access via acmacs-data/hidb5-update-download)
 #
@@ -30,12 +32,13 @@ DATA_FILES=("$ACMACS_DATA"/hidb5.{h1,h3,b}.json.xz
             "$ACMACS_DATA"/locationdb.json.xz)
 CLADES_FILE="$ACMACS_DATA/clades.json"
 
-FORCE=0; PULL=0; SEQ=1
+FORCE=0; PULL=0; SEQ=1; SEQ_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --force)  FORCE=1 ;;
     --pull)   PULL=1 ;;
     --no-seq) SEQ=0 ;;
+    --fast-seq) SEQ_ARGS+=(--index) ;;   # pure-Python name-index match (single-proc)
     -h|--help) sed -n 's/^# //p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
@@ -89,7 +92,7 @@ if [[ $titer_stale == 1 ]]; then
 fi
 if [[ $seq_stale == 1 ]]; then
   echo ">> sequence match (incremental; ~4 min first build, else ~5-30 s)…"
-  python3 build_sequences.py || echo ">> match skipped (ae unavailable); titer DB intact" >&2
+  python3 build_sequences.py "${SEQ_ARGS[@]+"${SEQ_ARGS[@]}"}" || echo ">> match skipped (ae unavailable); titer DB intact" >&2
 fi
 if [[ $clade_stale == 1 ]]; then
   echo ">> clades (clades.json, ~4 s)…"

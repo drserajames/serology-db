@@ -123,6 +123,16 @@ distinct, so `build_sequences.py` fans the work across processes
 (`~9.5 min → ~4 min`). It's memory-bandwidth-bound (each match scans the whole
 seqdb), so more cores give diminishing returns.
 
+**Opt-in `--index` fast path.** The per-key cost is dominated by rebuilding the
+whole `select_all()` selection every call, not the name scan. `--index` instead
+iterates the seqdb **once** into a `name → refs` map and dict-looks-up each key —
+misses and single-candidate names (97–98 % of keys) skip `select_all()` entirely;
+the ~2–3 % of names with several candidate sequences fall back to `filter_name` so
+ranking stays exact. A full `--index --rematch-all` rebuild is **byte-identical**
+to the parallel path (verified), single-process, and cuts the cold match from
+~4 min to ~1 min. Default stays the parallel scan; the cache format is identical so
+the two are interchangeable across runs.
+
 **Incremental cache.** The match is cached by the *stable* natural key
 `(subtype, name, reassortant, passage)` in `out/csv/match_cache.csv` (hits **and**
 misses), so a refresh only matches what's new or newly matchable:
@@ -166,10 +176,12 @@ Needs the built ae extension + reference data (auto-defaulted in the scripts):
 > tree and a fork coupling — for a one-time cold-build saving, since the match is
 > already incrementally cached (~5–30 s warm). Cheaper alternative if cold-build
 > speed ever matters: a **pure-Python name index** — iterate the seqdb once (~0.15 s
-> for 241k H3 seqs via the bound `.name()`), then dict-lookup each antigen. Measured
-> **100 % hit/miss agreement** with `filter_name` and 136/137 exact seq_id (the one
-> diff is a same-strain ranking tie-break), turning the ~4 min cold match into ~1 s
-> with **no ae rebuild**. Left unimplemented (caching already covers the common case).
+> for 241k H3 seqs via the bound `.name()`), then dict-lookup each antigen, falling
+> back to `filter_name` for the ~2–3 % of names with multiple candidate sequences.
+> **Now implemented** as the opt-in `build_sequences.py --index` flag (see "Sequences
+> & clades"): a full rebuild via `--index` produced a `match.csv` **byte-identical**
+> to the slow path, with **no ae rebuild** — so the pybind route buys nothing the
+> flag doesn't already give.
 
 ## Locations — resolved via locationdb
 
