@@ -40,6 +40,8 @@ import os
 import re
 import sys
 
+import natural_keys as nk
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ACMACS_DATA = os.environ.get(
     "ACMACS_DATA", os.path.normpath(os.path.join(HERE, os.pardir, "acmacs-data")))
@@ -91,6 +93,16 @@ def _attr(obj, name):
         return ""
 
 
+def _annot(obj):
+    """Return the annotations list (sorted strings) for an ae antigen/serum."""
+    try:
+        v = getattr(obj, "annotations")
+        v = v() if callable(v) else v
+        return sorted(str(x) for x in v) if v else []
+    except Exception:
+        return []
+
+
 def candidate_charts(sub, tb):
     assay = ASSAY.get(str(tb.get("A", "")).upper())
     rbc = str(tb.get("r", "") or "").lower().replace(" ", "-")
@@ -131,11 +143,11 @@ def aligned_chart(c3, sub, tb):
 
 
 def _rec_id(sub, prefix, *parts):
-    """Content-derived id from a natural key — stable across tables and rebuilds,
-    so the same unresolved strain (tested in several tables) collapses to one row.
-    Namespace `{sub}:{prefix}:{hash}` can't collide with hidb's `{sub}:{int}`."""
-    h = hashlib.md5("|".join([sub, *(str(p) for p in parts)]).encode()).hexdigest()
-    return f"{sub}:{prefix}:{h[:12]}"
+    """Content-derived id from a natural key (same designation scheme as
+    natural_keys: name+reassortant+ANNOTATIONS+passage), so distinct antigens that
+    differ only in annotations stay separate while a strain tested across tables
+    collapses to one row. Namespace `{sub}:{prefix}:{hash}` can't collide w/ hidb."""
+    return f"{sub}:{prefix}:{nk._h(*parts)}"
 
 
 def _loc_year(name):
@@ -154,8 +166,9 @@ def _loc_year(name):
 def antigen_row(sub, ag):
     """Return (ag_id, row-fields) for a recovered .ace antigen."""
     name, passage, reass = _attr(ag, "name"), _attr(ag, "passage"), _attr(ag, "reassortant")
+    annot = _annot(ag)
     location, year = _loc_year(name)
-    ag_id = _rec_id(sub, "ra", name, passage, reass)
+    ag_id = _rec_id(sub, "ra", name, reass, annot, passage)
     return ag_id, [ag_id, sub, name, SUBTYPE_TAG.get(sub, ""),
                    "", location, "", year, passage, reass, _attr(ag, "date")]
 
@@ -164,9 +177,11 @@ def serum_row(sub, sr):
     """Return (sr_id, row-fields) for a recovered .ace serum."""
     sid, name = _attr(sr, "serum_id"), _attr(sr, "name")
     passage, reass = _attr(sr, "passage"), _attr(sr, "reassortant")
-    sr_id = _rec_id(sub, "rs", sid, name, passage, reass)
+    annot = _annot(sr)
+    species = _attr(sr, "serum_species")
+    sr_id = _rec_id(sub, "rs", sid, name, reass, annot, passage, species)
     return sr_id, [sr_id, sub, sid, name, SUBTYPE_TAG.get(sub, ""),
-                   _attr(sr, "lineage"), "", "", "", passage, _attr(sr, "serum_species")]
+                   _attr(sr, "lineage"), "", "", "", passage, species]
 
 
 def main():
@@ -197,14 +212,19 @@ def main():
     ti_w.writerow(["tab_id", "ag_id", "sr_id", "titer_raw", "titer_kind",
                    "titer_value", "log_titer"])
 
-    seen_ag, seen_sr = set(), set()
-    n_tab = n_rec_ag = n_rec_sr = n_rec_ti = 0
+    seen_ag, seen_sr, seen_grain = set(), set(), set()
+    n_tab = n_rec_ag = n_rec_sr = n_rec_ti = n_dup_grain = 0
     n_clip_tables = n_aligned = 0
     for sub in SUBTYPES:
         path = os.path.join(ACMACS_DATA, f"hidb5.{sub}.json.xz")
         if not os.path.exists(path):
             continue
-        for ti, tb in enumerate(load_json_xz(path)["t"]):
+        d = load_json_xz(path)
+        # Registered entities must get the SAME natural keys build_db assigns, so
+        # recovered titers attach to the existing antigen/serum/table rows.
+        ag_keys = [nk.antigen_key(sub, a) for a in d["a"]]
+        sr_keys = [nk.serum_key(sub, s) for s in d["s"]]
+        for ti, tb in enumerate(d["t"]):
             ncol = max((len(r) for r in tb["t"]), default=0)
             if not (len(tb["t"]) > len(tb["a"]) or ncol > len(tb["s"])):
                 continue
@@ -213,13 +233,14 @@ def main():
             if ch is None:
                 continue
             n_aligned += 1
-            tab_id = f"{sub}:{ti}"
+            tab_id = nk.table_key(sub, tb, nk.table_content_hash(tb, ag_keys, sr_keys))
             na_reg, ns_reg = len(tb["a"]), len(tb["s"])
 
-            # map matrix index -> ag_id / sr_id (registered use hidb id; clipped new)
+            # map matrix index -> ag_id / sr_id (registered use the hidb natural
+            # key; clipped rows/cols get a fresh content-derived recovered id)
             def ag_of(r):
                 if r < na_reg:
-                    return f"{sub}:{tb['a'][r]}"
+                    return ag_keys[tb["a"][r]]
                 rid, fields = antigen_row(sub, ch.antigen(r))
                 if rid not in seen_ag:
                     seen_ag.add(rid)
@@ -228,7 +249,7 @@ def main():
 
             def sr_of(c):
                 if c < ns_reg:
-                    return f"{sub}:{tb['s'][c]}"
+                    return sr_keys[tb["s"][c]]
                 rid, fields = serum_row(sub, ch.serum(c))
                 if rid not in seen_sr:
                     seen_sr.add(rid)
@@ -244,7 +265,15 @@ def main():
                     if parsed is None:
                         continue
                     kind, val, lg = parsed
-                    ti_w.writerow([tab_id, ag_of(r), sr_of(c), cell, kind, val, lg])
+                    ag_id, sr_id = ag_of(r), sr_of(c)
+                    # grain safety net: a .ace can carry true replicate rows for one
+                    # antigen; keep the first titer so (tab,ag,sr) stays unique.
+                    grain = (tab_id, ag_id, sr_id)
+                    if grain in seen_grain:
+                        n_dup_grain += 1
+                        continue
+                    seen_grain.add(grain)
+                    ti_w.writerow([tab_id, ag_id, sr_id, cell, kind, val, lg])
                     n_rec_ti += 1
             n_rec_ag += len(seen_ag) - before_ag
             n_rec_sr += len(seen_sr) - before_sr
@@ -253,7 +282,7 @@ def main():
     for f in (ag_f, sr_f, ti_f):
         f.close()
     print(f"  clipped tables={n_clip_tables} strict-aligned={n_aligned} "
-          f"recovered from {n_tab} tables")
+          f"recovered from {n_tab} tables; dropped {n_dup_grain} replicate-grain cells")
     print(f"TOTAL  recovered antigens={n_rec_ag} sera={n_rec_sr} titers={n_rec_ti} "
           f"->  out/csv/recovered_*.csv")
     return 0

@@ -14,6 +14,9 @@ NOTE: contains real WHO CC serology data. Keep local; do not commit/push.
 """
 import csv, json, lzma, math, os, re, sys
 
+import natural_keys as nk
+from natural_keys import name_from  # re-exported so build_db.name_from still resolves
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Default assumes acmacs-data is a sibling of this repo; override via env.
 ACMACS_DATA = os.environ.get("ACMACS_DATA", os.path.normpath(os.path.join(HERE, os.pardir, "acmacs-data")))
@@ -50,15 +53,6 @@ def parse_titer(raw):
     return (kind, num, log_titer)
 
 
-def name_from(rec):
-    """Reconstruct a strain name O/i/y, tolerating heterogeneous records."""
-    iso = rec.get("i", "")
-    if "/" in str(iso):           # already a full name (older serum records)
-        return iso
-    loc, yr = rec.get("O", ""), rec.get("y", "")
-    return "/".join(p for p in (loc, iso, yr) if p)
-
-
 def first(x):
     return x[0] if isinstance(x, list) and x else (x or None)
 
@@ -72,12 +66,15 @@ def main():
     ti_f = open(os.path.join(CSV_DIR, "titer.csv"), "w", newline="")
     ag_w, sr_w, tb_w, ti_w = (csv.writer(f) for f in (ag_f, sr_f, tb_f, ti_f))
 
-    ag_w.writerow(["ag_id", "subtype", "name", "virus_type", "lineage",
+    # ag_id/sr_id/tab_id are content-based NATURAL keys (natural_keys.py); hidb_id
+    # keeps the old positional {sub}:{i} for provenance/debugging (first occurrence
+    # when identical records merge).
+    ag_w.writerow(["ag_id", "hidb_id", "subtype", "name", "virus_type", "lineage",
                    "location", "isolation", "year", "passage", "reassortant",
                    "collection_date"])
-    sr_w.writerow(["sr_id", "subtype", "serum_id", "name", "virus_type",
+    sr_w.writerow(["sr_id", "hidb_id", "subtype", "serum_id", "name", "virus_type",
                    "lineage", "location", "isolation", "year", "passage", "species"])
-    tb_w.writerow(["tab_id", "subtype", "assay", "rbc", "lab", "virus",
+    tb_w.writerow(["tab_id", "hidb_id", "subtype", "assay", "rbc", "lab", "virus",
                    "table_date"])
     ti_w.writerow(["tab_id", "ag_id", "sr_id", "titer_raw", "titer_kind",
                    "titer_value", "log_titer"])
@@ -90,34 +87,52 @@ def main():
         d = load_json_xz(path)
         A, S, T = d["a"], d["s"], d["t"]
 
+        # Precompute the positional-index -> natural-key maps for this subtype;
+        # titers are then emitted against the keys, not the volatile indices.
+        ag_keys = [nk.antigen_key(sub, a) for a in A]
+        sr_keys = [nk.serum_key(sub, s) for s in S]
+
+        seen_ag = set()
         for i, a in enumerate(A):
-            ag_w.writerow([f"{sub}:{i}", sub, name_from(a), a.get("V", ""),
+            k = ag_keys[i]
+            if k in seen_ag:            # identical records collapse to one row
+                continue
+            seen_ag.add(k)
+            ag_w.writerow([k, f"{sub}:{i}", sub, name_from(a), a.get("V", ""),
                            a.get("L", ""), a.get("O", ""), a.get("i", ""),
                            a.get("y", ""), a.get("P", ""), a.get("R", ""),
                            first(a.get("D"))])
+        seen_sr = set()
         for i, s in enumerate(S):
-            sr_w.writerow([f"{sub}:{i}", sub, s.get("I", ""), name_from(s),
+            k = sr_keys[i]
+            if k in seen_sr:
+                continue
+            seen_sr.add(k)
+            sr_w.writerow([k, f"{sub}:{i}", sub, s.get("I", ""), name_from(s),
                            s.get("V", ""), s.get("L", ""), s.get("O", ""),
                            s.get("i", ""), s.get("y", ""), s.get("P", ""),
                            s.get("s", "")])
-        n_ag += len(A); n_sr += len(S)
+        n_ag += len(seen_ag); n_sr += len(seen_sr)
 
+        seen_tab = set()
         for ti, tb in enumerate(T):
-            tab_id = f"{sub}:{ti}"
+            tab_id = nk.table_key(sub, tb, nk.table_content_hash(tb, ag_keys, sr_keys))
             raw_d = str(tb.get("D", ""))
             tdate = (f"{raw_d[0:4]}-{raw_d[4:6]}-{raw_d[6:8]}"
                      if len(raw_d) == 8 and raw_d.isdigit() else None)
-            tb_w.writerow([tab_id, sub, tb.get("A", ""), tb.get("r", ""),
-                           tb.get("l", ""), tb.get("V", ""), tdate])
+            if tab_id not in seen_tab:
+                seen_tab.add(tab_id)
+                tb_w.writerow([tab_id, f"{sub}:{ti}", sub, tb.get("A", ""),
+                               tb.get("r", ""), tb.get("l", ""), tb.get("V", ""), tdate])
             ag_idx, sr_idx, matrix = tb["a"], tb["s"], tb["t"]
             # A few tables carry more titer rows/cols than registered hidb
             # indices (antigens/sera not in the identity DB). Clip to the
-            # indexed extent and tally what was dropped.
+            # indexed extent and tally what was dropped (build_clipped recovers them).
             for r, row in enumerate(matrix):
                 if r >= len(ag_idx):
                     n_clip += sum(1 for c in row if parse_titer(c))
                     continue
-                ag_id = f"{sub}:{ag_idx[r]}"
+                ag_id = ag_keys[ag_idx[r]]
                 for c, cell in enumerate(row):
                     if c >= len(sr_idx):
                         if parse_titer(cell):
@@ -127,11 +142,11 @@ def main():
                     if parsed is None:        # missing '*' -> omit
                         continue
                     kind, val, lg = parsed
-                    ti_w.writerow([tab_id, ag_id, f"{sub}:{sr_idx[c]}",
+                    ti_w.writerow([tab_id, ag_id, sr_keys[sr_idx[c]],
                                    cell, kind, val, lg])
                     n_ti += 1
-        n_tb += len(T)
-        print(f"  {sub}: {len(A)} antigens, {len(S)} sera, {len(T)} tables")
+        n_tb += len(seen_tab)
+        print(f"  {sub}: {len(seen_ag)} antigens, {len(seen_sr)} sera, {len(seen_tab)} tables")
 
     for f in (ag_f, sr_f, tb_f, ti_f):
         f.close()

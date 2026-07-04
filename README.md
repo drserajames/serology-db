@@ -36,6 +36,7 @@ backstop; the primary protection is that all data output lives in the gitignored
 ```
 acmacs-data/hidb5.{h1,h3,b}.json.xz   (normalised antigen/serum identity + raw titer matrices)
    └─ build_db.py        → out/csv/{antigen,serum,titer_table,titer}.csv   tidy long form
+        (ids = content-based natural keys via natural_keys.py; see "Natural keys")
 whocc-tables/*.ace  (canonical source charts)
    └─ build_clipped.py   → out/csv/recovered_{antigen,serum,titer}.csv  cells hidb dropped (opt; via ae_backend)
 seqdb-{h1,h3,b}.v4.json.xz (HA sequences)
@@ -63,17 +64,25 @@ see below.
 
 | table | grain | key columns |
 |-------|-------|-------------|
-| `antigen` | one test antigen | `ag_id`, name, virus_type, lineage, location, year, passage, collection_date, source |
-| `serum` | one antiserum | `sr_id`, serum_id, name, species, lineage, passage, source |
-| `titer_table` | one assay table | `tab_id`, subtype, assay, rbc, lab, virus, table_date |
+| `antigen` | one test antigen | `ag_id`, hidb_id, name, virus_type, lineage, location, year, passage, collection_date, source |
+| `serum` | one antiserum | `sr_id`, hidb_id, serum_id, name, species, lineage, passage, source |
+| `titer_table` | one assay table | `tab_id`, hidb_id, subtype, assay, rbc, lab, virus, table_date |
 | `titer` | one antigen×serum reading | `tab_id`, `ag_id`, `sr_id`, titer_raw, titer_kind, titer_value, log_titer, log_titer_thresholded, source |
 | `sequence` | one antigen's HA seq | `ag_id`, seq_id, clade, clade_path, aa_length, nuc_length, aa |
 | `location` | one resolved place | `location` (raw hidb `O`), canonical, country, continent, division, latitude, longitude |
 | `titer_flat` *(view)* | denormalised join | titer + antigen + serum + `antigen_clade` + `antigen_country`/`antigen_continent` |
 | `antigen_sequence` *(view)* | antigen ⨝ seq ⨝ geo | antigen columns + seq_id, clade, aa + country/continent/lat/long |
 
-- IDs are `subtype:index` (e.g. `h3:1042`). Recovered antigens/sera (see
-  "Clipped cells") use content-derived ids `subtype:ra:<hash>` / `subtype:rs:<hash>`.
+- IDs are **content-based natural keys** (`natural_keys.py`): `{sub}:a:{hash}`
+  (antigen), `{sub}:s:{hash}` (serum), `{sub}:t:{hash}` (table). The antigen/serum
+  hash is ae's canonical *designation* — name + reassortant + annotations + passage;
+  the table hash is lab + assay + rbc + date + virus + a **reorder-invariant** hash
+  of its (antigen, serum, titer) content. Unlike hidb's positional indices these are
+  **stable across regenerations** (same identity → same id regardless of array
+  order), which is the prerequisite for incremental updates and the Postgres store.
+  The old positional id (`{sub}:{i}`) is retained as `hidb_id` for provenance.
+  Recovered antigens/sera (see "Clipped cells") use `{sub}:ra:{hash}` / `{sub}:rs:{hash}`
+  in the same scheme. See "Natural keys" below.
 - `source`: `hidb` (the bulk) or `ace_recovered` (clipped cells recovered from the
   source charts). Filter on it to include/exclude recovered data; `titer_flat`
   exposes both `source` (of the titer) and `antigen_source`.
@@ -86,10 +95,12 @@ see below.
   but a left-censored `<N` counts as `N/2` (`log−1`) and a right-censored `>N` as
   `N×2` (`log+1`). **Use this column for GMT/SD/averaging.** See "Censoring" below.
 
-Current volume (hidb): **268,729 antigens · 5,685 sera · 9,365 tables · 3,581,094
-titers · 102,050 antigen sequences**, plus **+995 antigens · +32 sera · +32,207
-titers** recovered from source charts (`source='ace_recovered'`) when `build_clipped`
-runs → 269,724 antigens · 5,717 sera · 3,613,301 titers total.
+Current volume (hidb): **268,728 antigens · 5,684 sera · 9,365 tables · 3,581,094
+titers · 102,050 antigen sequences** (antigens/sera are one lower than the raw hidb
+record count because natural-key dedup collapses one byte-identical duplicate each),
+plus **+1,021 antigens · +36 sera · +32,043 titers** recovered from source charts
+(`source='ace_recovered'`) when `build_clipped` runs → 269,749 antigens · 5,720 sera
+· 3,613,137 titers total.
 
 ## Sequences & clades — reusing ae's matcher
 
@@ -192,8 +203,9 @@ python3 -m pytest                                # from the repo root
 
 Three layers, all hermetic (no WHO data, no network):
 
-- **Unit** (`test_parsing.py`) — pins `build_db`'s pure reshape functions
-  (`parse_titer` kind/value/log, strain-name reconstruction).
+- **Unit** (`test_parsing.py`, `test_natural_keys.py`) — pins `build_db`'s pure
+  reshape functions (`parse_titer` kind/value/log, strain-name reconstruction) and
+  the natural-key scheme (determinism, field discrimination, reorder-invariance).
 - **Fixture regression** (`test_build_db_fixture.py`) — runs the real
   `build_db.main()` over a tiny synthetic `hidb5.h1.json.xz` in a tmp dir and
   asserts the emitted CSVs exactly, including the clipped-cell tally. This is the
@@ -312,10 +324,11 @@ drops `>N`; that lives in the optimizer, not in this analytics store.)
   registered cells are *byte-identical* to the source (strict alignment, so a
   wrong strain identity is never attached) — re-adds the dropped rows/cols as
   `antigen`/`serum`/`titer` rows tagged `source='ace_recovered'`. Result:
-  **32,207 / 32,718 cells (98.4%) recovered** across 1,352 tables (995 distinct
-  recovered antigens, 32 sera). The residual ~1.6% is 36 tables with no aligned
-  source chart on disk. Recovery is optional (needs `ae_backend` + `whocc-tables`);
-  a titers-only build simply omits it.
+  **32,043 / 32,718 cells (97.9%) recovered** across 1,352 tables (1,021 distinct
+  recovered antigens, 36 sera). The residual is 36 tables with no aligned source
+  chart on disk (~1.6%) plus 164 true replicate-grain cells dropped to keep the
+  `(table, antigen, serum)` grain unique. Recovery is optional (needs `ae_backend`
+  + `whocc-tables`); a titers-only build simply omits it.
 - **CJK names:** hidb5 uses a non-standard `\U####` escape for Chinese location
   names; `load_json_xz()` normalises it to standard JSON `\u####`.
 - **Sequence coverage ~38%:** only antigens with an HA sequence in seqdb get a
@@ -326,9 +339,42 @@ drops `>N`; that lives in the optimizer, not in this analytics store.)
   each `.ace`. Good for analytics; for canonical per-table provenance, go to the
   source charts.
 
+## Natural keys (`natural_keys.py`)
+
+hidb5's antigen/serum/table ids are **positional array indices** — `h3:1042` is
+"the 1042nd h3 antigen in *this* build". That index is **not stable across hidb
+regenerations**: the array reorders, so the same id can mean a different strain
+next fortnight. That's why titers are a full rebuild (an incremental append keyed
+on positional ids would silently corrupt) and it blocks any incremental/Postgres
+store.
+
+So ids are **derived from identity content** instead (shared by `build_db` and
+`build_clipped` via `natural_keys.py`, so the two can't drift):
+
+| entity | key | hash input |
+|---|---|---|
+| antigen | `{sub}:a:{h}` | name, reassortant, annotations, passage (ae "designation") |
+| serum | `{sub}:s:{h}` | serum_id, name, reassortant, annotations, passage, species |
+| table | `{sub}:t:{h}` | lab, assay, rbc, date, virus, **reorder-invariant** content hash |
+
+The table content hash is the sorted set of `(ag_key, sr_key, titer)` triples, so a
+row/column reshuffle across a regeneration leaves the id unchanged; the `{sub}:`
+prefix keeps subtype partitioning working. The old positional id is preserved in
+`hidb_id` for provenance/debugging.
+
+**Validated** against the current hidb5 (see `tests/test_natural_keys.py` +
+`test_db_invariants.test_titer_grain_unique`): over 3.58M titers the
+`(table, antigen, serum)` grain has **0 collisions and 0 value conflicts**; the
+keys collapse exactly 1 byte-identical duplicate antigen and 1 serum (correct
+dedup). Annotations are part of the antigen/serum key precisely because omitting
+them merged distinct egg/cell variants and produced grain conflicts.
+
 ## Path to the eventual service
 
 This schema is deliberately portable: the tidy `titer` fact + dimension tables
 lift directly into Postgres as the system-of-record, with this DuckDB/Parquet
 layer retained as the fast query + bulk-download tier. The reusable asset across
-both is the `ae`/`hidb5` identity normalisation — keep it separable from storage.
+both is the `ae`/`hidb5` identity normalisation, now crystallised as the
+**content-based natural keys above** — a stable `(table, antigen, serum)` grain is
+exactly what an incremental UPSERT needs. Keep `natural_keys.py` separable from
+storage.

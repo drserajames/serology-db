@@ -35,6 +35,30 @@ def test_no_orphan_sequence_antigen(db):
         "WHERE a.ag_id IS NULL").fetchone()[0] == 0
 
 
+# --- content-based natural keys (issue #5) ---------------------------------
+def test_ids_are_natural_keys(db):
+    # hidb rows carry {sub}:a|s:{hash} keys and a positional hidb_id; recovered
+    # rows carry {sub}:ra|rs:{hash} and NULL hidb_id.
+    bad_ag = db.execute(
+        "SELECT count(*) FROM antigen WHERE source='hidb' "
+        "AND ag_id NOT SIMILAR TO '(h1|h3|b):a:[0-9a-f]+'").fetchone()[0]
+    assert bad_ag == 0
+    bad_tab = db.execute(
+        "SELECT count(*) FROM titer_table "
+        "WHERE tab_id NOT SIMILAR TO '(h1|h3|b):t:[0-9a-f]+'").fetchone()[0]
+    assert bad_tab == 0
+    assert db.execute("SELECT count(*) FROM antigen WHERE source='hidb' "
+                      "AND hidb_id IS NULL").fetchone()[0] == 0
+
+
+def test_titer_grain_unique(db):
+    # the whole point of natural keys: (table, antigen, serum) is a real grain.
+    dup = db.execute(
+        "SELECT count(*) FROM (SELECT tab_id, ag_id, sr_id FROM titer "
+        "GROUP BY ALL HAVING count(*) > 1)").fetchone()[0]
+    assert dup == 0
+
+
 # --- primary-key uniqueness ------------------------------------------------
 def test_unique_primary_keys(db):
     for table, key in (("antigen", "ag_id"), ("serum", "sr_id"),

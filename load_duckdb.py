@@ -22,19 +22,21 @@ rd = lambda name: (f"read_csv('{os.path.join(CSV, name)}', header=true, "
                    f"nullstr='', sample_size=-1)")
 
 con.execute(f"""
+-- ag_id/sr_id/tab_id are content-based natural keys (natural_keys.py); hidb_id is
+-- the old positional subtype:index kept for provenance. source: 'hidb'|'ace_recovered'.
 CREATE TABLE antigen AS SELECT
-  ag_id, subtype, name, virus_type, lineage, location, isolation, year,
+  ag_id, hidb_id, subtype, name, virus_type, lineage, location, isolation, year,
   passage, reassortant, TRY_CAST(collection_date AS DATE) AS collection_date,
-  'hidb' AS source          -- provenance: 'hidb' | 'ace_recovered' (see below)
+  'hidb' AS source
 FROM {rd('antigen.csv')};
 
 CREATE TABLE serum AS SELECT
-  sr_id, subtype, serum_id, name, virus_type, lineage, location, isolation,
+  sr_id, hidb_id, subtype, serum_id, name, virus_type, lineage, location, isolation,
   year, passage, species, 'hidb' AS source
 FROM {rd('serum.csv')};
 
 CREATE TABLE titer_table AS SELECT
-  tab_id, subtype, assay, rbc, lab, virus,
+  tab_id, hidb_id, subtype, assay, rbc, lab, virus,
   TRY_CAST(table_date AS DATE) AS table_date
 FROM {rd('titer_table.csv')};
 
@@ -65,12 +67,12 @@ _rec_ag = os.path.join(CSV, "recovered_antigen.csv")
 if os.path.exists(_rec_ag):
     con.execute(f"""
     INSERT INTO antigen SELECT
-      ag_id, subtype, name, virus_type, lineage, location, isolation, year,
-      passage, reassortant, TRY_CAST(collection_date AS DATE), 'ace_recovered'
+      ag_id, NULL AS hidb_id, subtype, name, virus_type, lineage, location, isolation,
+      year, passage, reassortant, TRY_CAST(collection_date AS DATE), 'ace_recovered'
     FROM {rd('recovered_antigen.csv')};
     INSERT INTO serum SELECT
-      sr_id, subtype, serum_id, name, virus_type, lineage, location, isolation,
-      year, passage, species, 'ace_recovered'
+      sr_id, NULL AS hidb_id, subtype, serum_id, name, virus_type, lineage, location,
+      isolation, year, passage, species, 'ace_recovered'
     FROM {rd('recovered_serum.csv')};
     INSERT INTO titer SELECT
       tab_id, ag_id, sr_id, titer_raw, titer_kind,

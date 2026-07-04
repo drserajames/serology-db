@@ -37,18 +37,29 @@ def test_row_counts_and_clipping(fixture_env, capsys):
     assert f"clipped_cells={EXPECTED['n_clipped']}" in out
 
 
-def test_ids_are_subtype_prefixed(fixture_env):
+def test_ids_are_natural_keys(fixture_env):
+    import re
     build_db = fixture_env["module"]
     csv_dir = str(fixture_env["csv_dir"])
     build_db.main()
 
     antigens = _read_csv(csv_dir, "antigen.csv")
-    assert {a["ag_id"] for a in antigens} == {"h1:0", "h1:1", "h1:2"}
+    # ag_id is now a content-based natural key {sub}:a:{hash}; hidb_id keeps the
+    # old positional id for provenance.
+    assert all(re.fullmatch(r"h1:a:[0-9a-f]{16}", a["ag_id"]) for a in antigens)
+    assert {a["hidb_id"] for a in antigens} == {"h1:0", "h1:1", "h1:2"}
+    assert len({a["ag_id"] for a in antigens}) == 3       # all distinct
+
+    tables = _read_csv(csv_dir, "titer_table.csv")
+    assert re.fullmatch(r"h1:t:[0-9a-f]{12,16}", tables[0]["tab_id"])
+    assert tables[0]["hidb_id"] == "h1:0"
+
     titers = _read_csv(csv_dir, "titer.csv")
+    ag_ids = {a["ag_id"] for a in antigens}
     for t in titers:
-        assert t["tab_id"] == "h1:0"
-        assert t["ag_id"].startswith("h1:")
-        assert t["sr_id"].startswith("h1:")
+        assert t["tab_id"] == tables[0]["tab_id"]         # natural table key
+        assert t["ag_id"] in ag_ids                       # references a real antigen key
+        assert re.fullmatch(r"h1:s:[0-9a-f]{16}", t["sr_id"])
 
 
 def test_titer_kinds_and_values(fixture_env):
