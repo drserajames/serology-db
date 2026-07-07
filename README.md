@@ -5,6 +5,10 @@ A tidy, queryable store of WHO CC influenza serology (HI/FRA/MN/…) built from 
 narrow lookup API doesn't expose — and a forward-compatible seed for a future
 Postgres-backed upload/query/download service.
 
+> **Just want to query the data?** See **[`USING.md`](USING.md)** — a task-oriented
+> guide to connecting, the schema, the censoring/provenance conventions, and a
+> copy-paste query cookbook. This README is the *design* doc (how it's built and why).
+
 > **Code vs data split.** This directory holds **only code** (build scripts,
 > `refresh.sh`, README). All output — CSVs, Parquet, and the ~240 MB
 > `serology.duckdb` — is written to **`$SERO_OUT`, default
